@@ -464,46 +464,37 @@ module FHIR
       FHIR.logger.info "POSTING: #{url}"
       headers = clean_headers(headers)
       payload = request_payload(resource, headers) if resource
-      if @use_oauth2_auth
-        # @client.refresh!
-        begin
-          response = @client.post(url, headers: headers, body: payload)
-        rescue => e
-          unless e.response
-            # Re-raise the client error if there's no response. Otherwise, logging
-            # and other things break below!
-            FHIR.logger.error "POST - Request: #{url} failed! No response from server: #{e}"
-            raise # Re-raise the same error we caught.
-          end
-          response = e.response if e.response
+      headers.merge!(@security_headers) if @use_basic_auth
+      begin
+        response = @client.post(url, payload, headers)
+      rescue RestClient::MovedPermanently,
+             RestClient::Found,
+             RestClient::TemporaryRedirect => redirect
+        response = redirect.response.follow_redirection
+      rescue => e
+        unless e.response
+          # Re-raise the client error if there's no response. Otherwise, logging
+          # and other things break below!
+          FHIR.logger.error "POST - Request: #{url} failed! No response from server: #{e}"
+          raise # Re-raise the same error we caught.
         end
-        req = {
-          method: :post,
-          url: url,
-          path: url.gsub(@base_service_url, ''),
-          headers: headers,
-          payload: payload
-        }
-        res = {
-          code: response.status.to_s,
-          headers: response.headers,
-          body: response.body
-        }
-        FHIR.logger.debug "POST - Request: #{req}, Response: #{response.body.force_encoding('UTF-8')}"
-        @reply = FHIR::ClientReply.new(req, res, self)
-      else
-        headers.merge!(@security_headers) if @use_basic_auth
-        @client.post(url, payload, headers) do |resp, request, result|
-          FHIR.logger.debug "POST - Request: #{request.to_json}\nResponse:\nResponse Headers: #{scrubbed_response_headers(result.each_key {})} \nResponse Body: #{resp.force_encoding('UTF-8')}"
-          request.args[:path] = url.gsub(@base_service_url, '')
-          res = {
-            code: result.code,
-            headers: scrubbed_response_headers(result.each_key {}),
-            body: resp
-          }
-          @reply = FHIR::ClientReply.new(request.args, res, self)
-        end
+        response = e.response if e.response
       end
+
+      req = {
+        method: :post,
+        url: url,
+        path: url.gsub(@base_service_url, ''),
+        headers: headers,
+        payload: payload
+      }
+      res = {
+        code: response.code.to_s,
+        headers: response.headers,
+        body: response.body
+      }
+      FHIR.logger.debug "POST - Request: #{req}, Response: #{response.body.force_encoding('UTF-8')}"
+      @reply = FHIR::ClientReply.new(req, res, self)
     end
 
     def put(path, resource, headers)
